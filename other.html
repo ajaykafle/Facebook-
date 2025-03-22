@@ -9,8 +9,8 @@
         #container { width: 300px; margin: auto; margin-top: 50px; padding: 20px; background: white; border-radius: 10px; box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1); }
         button { margin: 10px; padding: 10px; width: 100%; border: none; cursor: pointer; font-size: 16px; }
         #startCall { background: green; color: white; }
-        #endCall { background: red; color: white; }
-        #toggleMic { background: blue; color: white; }
+        #endCall { background: red; color: white; display: none; }
+        #toggleMic { background: blue; color: white; display: none; }
     </style>
 </head>
 <body>
@@ -18,14 +18,14 @@
         <h2>Audio Call App</h2>
         <p id="userEmail">Loading...</p>
         <button id="startCall">Start Call</button>
-        <button id="endCall" style="display:none;">End Call</button>
-        <button id="toggleMic" style="display:none;">Toggle Mic</button>
+        <button id="endCall">End Call</button>
+        <button id="toggleMic">Toggle Mic</button>
         <p id="callStatus"></p>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyAanJ9JJ7wNfha2vX2k0slZF6qcfxNERj0",
@@ -47,6 +47,7 @@
         let localStream;
         let peerConnection;
         let micEnabled = true;
+        let callAccepted = false;
         const servers = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
         document.getElementById("startCall").addEventListener("click", async () => {
@@ -57,21 +58,42 @@
             peerConnection = new RTCPeerConnection(servers);
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    updateDoc(doc(db, "calls", email), { iceCandidates: event.candidate.toJSON() }, { merge: true });
+                }
+            };
+
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
 
             await setDoc(doc(db, "calls", email), { caller: email, receiver, offer });
 
             document.getElementById("callStatus").innerText = "Calling...";
+            document.getElementById("endCall").style.display = "block";
+            document.getElementById("toggleMic").style.display = "block";
         });
 
         onSnapshot(collection(db, "calls"), (snapshot) => {
             snapshot.docs.forEach(async (docSnap) => {
                 const callData = docSnap.data();
-                if (callData.receiver === email) {
+                if (callData.receiver === email && !callData.answer && !callAccepted) {
+                    callAccepted = true; // Prevent repeated alerts
+
                     if (confirm(`Incoming call from ${callData.caller}. Accept?`)) {
                         answerCall(docSnap.id, callData.offer);
+                    } else {
+                        callAccepted = false; // Allow future calls
                     }
+                }
+
+                if (callData.answer && callData.caller === email && peerConnection) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(callData.answer));
+                    document.getElementById("callStatus").innerText = "Call in progress...";
+                }
+
+                if (callData.iceCandidates && peerConnection) {
+                    peerConnection.addIceCandidate(new RTCIceCandidate(callData.iceCandidates));
                 }
             });
         });
@@ -81,24 +103,36 @@
             peerConnection = new RTCPeerConnection(servers);
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    updateDoc(doc(db, "calls", callId), { iceCandidates: event.candidate.toJSON() }, { merge: true });
+                }
+            };
+
             await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
 
-            await setDoc(doc(db, "calls", callId), { answer }, { merge: true });
+            await updateDoc(doc(db, "calls", callId), { answer });
 
             document.getElementById("callStatus").innerText = "Call in progress...";
+            document.getElementById("endCall").style.display = "block";
+            document.getElementById("toggleMic").style.display = "block";
         }
 
         document.getElementById("endCall").addEventListener("click", async () => {
-            peerConnection.close();
+            if (peerConnection) peerConnection.close();
             await deleteDoc(doc(db, "calls", email));
             document.getElementById("callStatus").innerText = "Call ended.";
+            document.getElementById("endCall").style.display = "none";
+            document.getElementById("toggleMic").style.display = "none";
+            callAccepted = false; // Reset for future calls
         });
 
         document.getElementById("toggleMic").addEventListener("click", () => {
             micEnabled = !micEnabled;
             localStream.getAudioTracks()[0].enabled = micEnabled;
+            document.getElementById("toggleMic").innerText = micEnabled ? "Mute Mic" : "Unmute Mic";
         });
     </script>
 </body>
