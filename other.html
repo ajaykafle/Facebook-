@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Call</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background-color: #f4f4f4; }
+        #container { width: 300px; margin: auto; margin-top: 50px; padding: 20px; background: white; border-radius: 10px; box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1); }
+        button { margin: 10px; padding: 10px; width: 100%; border: none; cursor: pointer; font-size: 16px; }
+        #startCall { background: green; color: white; }
+        #endCall { background: red; color: white; }
+        #toggleMic { background: blue; color: white; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h2>Audio Call App</h2>
+        <p id="userEmail">Loading...</p>
+        <button id="startCall">Start Call</button>
+        <button id="endCall" style="display:none;">End Call</button>
+        <button id="toggleMic" style="display:none;">Toggle Mic</button>
+        <p id="callStatus"></p>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAanJ9JJ7wNfha2vX2k0slZF6qcfxNERj0",
+            authDomain: "canvas-55c31.firebaseapp.com",
+            projectId: "canvas-55c31",
+            storageBucket: "canvas-55c31.appspot.com",
+            messagingSenderId: "744324241059",
+            appId: "1:744324241059:web:4914e76d1436bcfc659116",
+            measurementId: "G-NTK4L0L5P8"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const email = localStorage.getItem("userEmail");
+        if (!email) window.location.href = "login.html";
+        document.getElementById("userEmail").innerText = `Logged in as: ${email}`;
+
+        let localStream;
+        let peerConnection;
+        let micEnabled = true;
+        const servers = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+        document.getElementById("startCall").addEventListener("click", async () => {
+            const receiver = prompt("Enter email of the person to call:");
+            if (!receiver) return;
+
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            peerConnection = new RTCPeerConnection(servers);
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+
+            await setDoc(doc(db, "calls", email), { caller: email, receiver, offer });
+
+            document.getElementById("callStatus").innerText = "Calling...";
+        });
+
+        onSnapshot(collection(db, "calls"), (snapshot) => {
+            snapshot.docs.forEach(async (docSnap) => {
+                const callData = docSnap.data();
+                if (callData.receiver === email) {
+                    if (confirm(`Incoming call from ${callData.caller}. Accept?`)) {
+                        answerCall(docSnap.id, callData.offer);
+                    }
+                }
+            });
+        });
+
+        async function answerCall(callId, offer) {
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            peerConnection = new RTCPeerConnection(servers);
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            await setDoc(doc(db, "calls", callId), { answer }, { merge: true });
+
+            document.getElementById("callStatus").innerText = "Call in progress...";
+        }
+
+        document.getElementById("endCall").addEventListener("click", async () => {
+            peerConnection.close();
+            await deleteDoc(doc(db, "calls", email));
+            document.getElementById("callStatus").innerText = "Call ended.";
+        });
+
+        document.getElementById("toggleMic").addEventListener("click", () => {
+            micEnabled = !micEnabled;
+            localStream.getAudioTracks()[0].enabled = micEnabled;
+        });
+    </script>
+</body>
+</html>
